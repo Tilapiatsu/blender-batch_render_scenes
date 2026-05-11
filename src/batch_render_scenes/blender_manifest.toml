@@ -1,0 +1,24 @@
+schema_version = "1.0.0"
+
+id = "batch_render_scenes"
+version = "1.0.0"
+name = "Batch Render Scenes"
+tagline = "Simple batch scene render of multiple files"
+maintainer = "Tilapiatsu <tilapiatsu@hotmail.fr>"
+type = "add-on"
+
+website = "https://github.com/Tilapiatsu/blender-batch_render_scenes"
+
+tags = ["Render", "Pipeline"]
+
+blender_version_min = "2.9.3"
+
+license = ["SPDX:GPL-3.0-or-later"]
+
+copyright = ["2025 Tilapiatsu"]
+
+[permissions]
+files = "Write script in temporary files to batch render"
+
+[build]
+paths_exclude_pattern = ["/.git/", "__pycache__/", ".gitignore"]
