@@ -30,7 +30,6 @@ import tempfile
 import subprocess
 from pathlib import Path
 
-from bpy_extras.io_utils import ImportHelper
 from bpy.types import Operator, Panel, PropertyGroup, AddonPreferences, UIList
 
 from bpy.props import (
@@ -96,6 +95,16 @@ class BRS_FileItem(PropertyGroup):
     relpath: StringProperty()
     scene_count: IntProperty(default=0)
     scene_names: StringProperty()
+
+
+class BRS_Settings(PropertyGroup):
+    files: CollectionProperty(type=BRS_FileItem)
+    index: IntProperty()
+    root_folder: StringProperty(name="Root Folder", default="", subtype="DIR_PATH")
+    max_depth: IntProperty(name="Max Depth", default=0, min=0)
+    is_scanning: BoolProperty(default=False)
+    scan_status: StringProperty(default="")
+    filter_name: StringProperty(name="Name Filter")
 
 
 # ============================================================
@@ -173,35 +182,46 @@ class BRS_OT_batch_popup(Operator):
     bl_label = "Batch Render Scenes"
     bl_options = {"REGISTER"}
 
-    root_folder: StringProperty(name="Root Folder")
-
-    max_depth: IntProperty(name="Depth", default=2, min=0)
-
-    filter_name: StringProperty(name="Name Filter")
-
     def invoke(self, context, event):
         wm = context.window_manager
+        settings = wm.brs_settings
+        settings.is_scanning = False
         return wm.invoke_props_dialog(self, width=900)
 
     def draw(self, context):
         layout = self.layout
         scene = context.scene
-        wm = context.window_manager
-
-        layout.prop(wm, "brs_root_folder")
-        layout.prop(wm, "brs_max_depth")
-
-        row = layout.row()
-        row.operator("render.batch_scan", text="Scan")
-
-        layout.template_list("BRS_UL_files", "", scene, "brs_files", scene, "brs_index", rows=14)
-
-        layout.separator()
-        layout.prop(self, "filter_name")
+        settings = context.window_manager.brs_settings
 
         row = layout.row(align=True)
-        row.operator("render.brs_select_filter", text="Select Match").mode = "SELECT"
-        row.operator("render.brs_select_filter", text="Unselect Match").mode = "UNSELECT"
+        split = row.split(factor=0.8)
+        split.prop(settings, "root_folder")
+        split.prop(settings, "max_depth", icon="SORTSIZE")
+
+        row = layout.row()
+
+        if settings.is_scanning:
+            row.enabled = False
+            row.operator("render.batch_scan", text="Scanning...", icon="FILE_REFRESH")
+        else:
+            row.operator("render.batch_scan", text="Scan", icon="FILE_REFRESH")
+
+        if settings.scan_status:
+            layout.label(text=settings.scan_status, icon="INFO")
+
+        row = layout.row(align=True)
+        row.operator("render.brs_select_all", text="Select All", icon="CHECKBOX_HLT").state = True
+        row.operator("render.brs_select_all", text="Unselect All", icon="CHECKBOX_DEHLT").state = False
+        row.operator("render.brs_invert_selection", text="Invert")
+
+        layout.template_list("BRS_UL_files", "", settings, "files", settings, "index", rows=14)
+
+        layout.separator()
+        layout.prop(settings, "filter_name", icon="OUTLINER_DATA_FONT")
+
+        row = layout.row(align=True)
+        row.operator("render.brs_select_filter", text="Select Match", icon="CHECKBOX_HLT").mode = "SELECT"
+        row.operator("render.brs_select_filter", text="Unselect Match", icon="CHECKBOX_DEHLT").mode = "UNSELECT"
 
     def execute(self, context):
         bpy.ops.render.brs_launch_terminal()
@@ -217,31 +237,86 @@ class BRS_OT_scan(Operator):
     bl_idname = "render.batch_scan"
     bl_label = "Scan"
 
+    _timer = None
+    _files = []
+    _index = 0
+    _root = ""
+    _depth = 0
+
     def execute(self, context):
 
         scene = context.scene
-        wm = context.window_manager
+        settings = context.window_manager.brs_settings
 
-        scene.brs_files.clear()
+        if settings.is_scanning:
+            return {"CANCELLED"}
 
-        root = wm.brs_root_folder
-        depth = wm.brs_max_depth
+        self._root = settings.root_folder
+        self._depth = settings.max_depth
 
-        if not root:
+        if not self._root:
             self.report({"WARNING"}, "Choose root folder")
             return {"CANCELLED"}
 
-        for f in find_blend_files(root, depth):
-            scenes = query_render_scenes(str(f))
+        settings.files.clear()
+        settings.is_scanning = True
+        settings.scan_status = "Preparing scan..."
 
-            item = scene.brs_files.add()
-            item.filepath = str(f)
-            item.relpath = os.path.relpath(str(f), root)
-            item.scene_count = len(scenes)
-            item.scene_names = ", ".join(scenes)
+        self._files = list(find_blend_files(self._root, self._depth))
+        self._index = 0
 
-        self.report({"INFO"}, f"Found {len(scene.brs_files)} files")
-        return {"FINISHED"}
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.05, window=context.window)
+        wm.modal_handler_add(self)
+
+        self.report({"INFO"}, f"Scanning {len(self._files)} blend files...")
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+
+        wm = context.window_manager
+        scene = context.scene
+        settings = wm.brs_settings
+
+        # ----------------------------------------------------
+        # FINISHED
+        # ----------------------------------------------------
+        if self._index >= len(self._files):
+            wm.event_timer_remove(self._timer)
+
+            settings.is_scanning = False
+            settings.scan_status = f"Scan complete: {len(settings.files)} files found"
+
+            for area in context.screen.areas:
+                area.tag_redraw()
+
+            self.report({"INFO"}, f"Batch scan complete ({len(settings.files)} files)")
+
+            return {"FINISHED"}
+
+        # ----------------------------------------------------
+        # PROCESS ONE FILE
+        # ----------------------------------------------------
+        f = self._files[self._index]
+        self._index += 1
+
+        settings.scan_status = f"Scanning {self._index}/{len(self._files)} : {os.path.basename(str(f))}"
+
+        scenes = query_render_scenes(str(f))
+
+        item = settings.files.add()
+        item.filepath = str(f)
+        item.relpath = os.path.relpath(str(f), self._root)
+        item.scene_count = len(scenes)
+        item.scene_names = ", ".join(scenes)
+
+        for area in context.screen.areas:
+            area.tag_redraw()
+
+        return {"RUNNING_MODAL"}
 
 
 # ============================================================
@@ -257,14 +332,36 @@ class BRS_OT_select_filter(Operator):
 
     def execute(self, context):
 
-        scene = context.scene
-        op = context.window_manager.operators[-1]
-        text = op.filter_name.lower()
+        settings = context.window_manager.brs_settings
 
-        for item in scene.brs_files:
+        text = settings.filter_name.lower()
+
+        for item in settings.files:
             if text in item.relpath.lower():
                 item.selected = self.mode == "SELECT"
 
+        return {"FINISHED"}
+
+
+class BRS_OT_select_all(Operator):
+    bl_idname = "render.brs_select_all"
+    bl_label = "Select All"
+
+    state: BoolProperty(default=True)
+
+    def execute(self, context):
+        for item in context.window_manager.brs_settings.files:
+            item.selected = self.state
+        return {"FINISHED"}
+
+
+class BRS_OT_invert_selection(Operator):
+    bl_idname = "render.brs_invert_selection"
+    bl_label = "Invert Selection"
+
+    def execute(self, context):
+        for item in context.window_manager.brs_settings.files:
+            item.selected = not item.selected
         return {"FINISHED"}
 
 
@@ -280,11 +377,12 @@ class BRS_OT_launch_terminal(Operator):
     def execute(self, context):
 
         scene = context.scene
+        settings = context.window_manager.brs_settings
         p = prefs()
 
         lines = []
 
-        for item in scene.brs_files:
+        for item in settings.files:
             if not item.selected:
                 continue
 
@@ -315,7 +413,7 @@ class BRS_OT_launch_terminal(Operator):
         args = p.terminal_args.split()
 
         cmd = [p.terminal_path] + args + [path]
-
+        print(cmd)
         subprocess.Popen(cmd)
 
         self.report({"INFO"}, "Batch render launched")
@@ -341,9 +439,12 @@ classes = (
     BRS_PT_scene_panel,
     BRS_FileItem,
     BRS_UL_files,
+    BRS_Settings,
     BRS_OT_batch_popup,
     BRS_OT_scan,
     BRS_OT_select_filter,
+    BRS_OT_select_all,
+    BRS_OT_invert_selection,
     BRS_OT_launch_terminal,
 )
 
@@ -355,10 +456,7 @@ def register():
 
     bpy.types.Scene.render_scene = BoolProperty(name="Render Scene", default=False)
 
-    bpy.types.Scene.brs_files = CollectionProperty(type=BRS_FileItem)
-    bpy.types.Scene.brs_index = IntProperty()
-    bpy.types.WindowManager.brs_root_folder = StringProperty(name="Root Folder", default="", subtype="DIR_PATH")
-    bpy.types.WindowManager.brs_max_depth = IntProperty(name="Max Depth", default=2, min=0)
+    bpy.types.WindowManager.brs_settings = PointerProperty(type=BRS_Settings)
 
     bpy.types.TOPBAR_MT_render.append(render_menu)
 
@@ -368,8 +466,7 @@ def unregister():
     bpy.types.TOPBAR_MT_render.remove(render_menu)
 
     del bpy.types.Scene.render_scene
-    del bpy.types.Scene.brs_files
-    del bpy.types.Scene.brs_index
+    del bpy.types.WindowManager.brs_settings
 
     for c in reversed(classes):
         bpy.utils.unregister_class(c)
