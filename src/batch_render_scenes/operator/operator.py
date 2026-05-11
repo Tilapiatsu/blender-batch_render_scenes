@@ -153,7 +153,13 @@ class BRS_OT_scan(Operator):
         item.filepath = str(f)
         item.relpath = os.path.relpath(str(f), self._root)
         item.scene_count = len(scenes)
-        item.scene_names = ", ".join(scenes)
+        if not item.scene_count:
+            item.selected = False
+        for s in scenes:
+            scene_item = item.scene_render.add()
+            scene_item.name = s["name"]
+            scene_item.frame_start = int(s["frame_start"])
+            scene_item.frame_end = int(s["frame_end"])
 
         for area in context.screen.areas:
             area.tag_redraw()
@@ -170,7 +176,7 @@ import bpy, json
 result=[]
 for s in bpy.data.scenes:
     if getattr(s,"render_scene",False):
-        result.append(s.name)
+        result.append({'name':s.name, 'frame_start':s.frame_start, 'frame_end':s.frame_end})
 print("BATCH_RENDER_SCENES="+json.dumps(result))
 """
 
@@ -268,13 +274,10 @@ class BRS_OT_launch_terminal(Operator):
             if not item.selected:
                 continue
 
-            if not item.scene_names:
-                continue
-
-            scenes = [x.strip() for x in item.scene_names.split(",") if x.strip()]
-
-            for sc in scenes:
-                cmd = f'"{p.blender_path}" -b "{item.filepath}" -S "{sc}" -f 1'
+            for sc in item.scene_render:
+                cmd = (
+                    f'"{p.blender_path}" -b "{item.filepath}" -S "{sc.name}" -a  -s {sc.frame_start} -e {sc.frame_end}'
+                )
                 lines.append(cmd)
 
         if not lines:

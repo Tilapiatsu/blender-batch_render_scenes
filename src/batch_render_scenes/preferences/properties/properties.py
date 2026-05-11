@@ -8,12 +8,18 @@ from bpy.props import BoolProperty, StringProperty, IntProperty, CollectionPrope
 # ============================================================
 
 
+class BRS_SceneRender(PropertyGroup):
+    name: StringProperty()
+    frame_start: IntProperty()
+    frame_end: IntProperty()
+
+
 class BRS_FileItem(PropertyGroup):
     selected: BoolProperty(default=True)
     filepath: StringProperty()
     relpath: StringProperty()
     scene_count: IntProperty(default=0)
-    scene_names: StringProperty()
+    scene_render: CollectionProperty(type=BRS_SceneRender)
 
 
 class BRS_Settings(PropertyGroup):
@@ -37,7 +43,7 @@ class BRS_UL_files(UIList):
         row.prop(item, "selected", text="")
         row.label(text=item.relpath)
         row.label(text=f"{item.scene_count} scenes")
-        row.label(text=item.scene_names)
+        # row.label(text=item.scene_render.name)
 
 
 # ============================================================
@@ -55,7 +61,7 @@ def render_menu(self, context):
 # ============================================================
 
 
-classes = (BRS_FileItem, BRS_Settings, BRS_UL_files)
+classes = (BRS_SceneRender, BRS_FileItem, BRS_Settings, BRS_UL_files)
 
 
 def register():
