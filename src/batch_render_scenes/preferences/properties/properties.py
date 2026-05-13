@@ -18,7 +18,7 @@ class BRS_FileItem(PropertyGroup):
     selected: BoolProperty(default=True)
     filepath: StringProperty()
     relpath: StringProperty()
-    scene_count: IntProperty(default=0)
+    scene_count: IntProperty(default=-1)
     scene_render: CollectionProperty(type=BRS_SceneRender)
 
 
@@ -39,10 +39,29 @@ class BRS_Settings(PropertyGroup):
 
 class BRS_UL_files(UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
-        row = layout.row(align=True)
+        settings = context.window_manager.brs_settings
+        split = layout.split(factor=0.8)
+        row = split.row(align=True)
         row.prop(item, "selected", text="")
         row.label(text=item.relpath)
-        row.label(text=f"{item.scene_count} scenes")
+        if item.scene_count >= 0:
+            row.label(text=f"{item.scene_count} scenes")
+        else:
+            row.label(text="")
+
+        row = split.row(align=True)
+
+        if settings.is_scanning:
+            name = "Scanning ..."
+            row.enabled = False
+        else:
+            name = "Scan Scenes"
+
+        update = row.operator("render.batch_scan", text=name, icon="FILE_REFRESH")
+        update.mode = "SCENES"
+        update.target = "ITEM"
+        update.index = index
+
         # row.label(text=item.scene_render.name)
 
 
